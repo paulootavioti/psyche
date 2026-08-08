@@ -1,0 +1,7 @@
+import {beforeAll,describe,expect,it,vi} from 'vitest';
+beforeAll(async()=>{await import('../app.js');await vi.waitFor(()=>expect(document.querySelector('#authScreen').classList.contains('hidden')).toBe(true));await vi.waitFor(()=>expect(document.querySelector('#receiptResultCount').textContent).toContain('0 recibos'));});
+describe('Recibos',()=>{
+ it('emite recibo manual numerado',async()=>{document.querySelector('.receipts-action').click();const form=document.querySelector('#receiptForm');form.elements.patient_id.value='pat_1';form.elements.description.value='Sessão de psicoterapia';form.elements.amount.value='280';form.elements.payment_date.value='2026-08-05';form.elements.patient_document.value='12345678901';form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await vi.waitFor(()=>expect(document.querySelector('#receiptRows').textContent).toContain('REC-2026-000001'));expect(globalThis.__apiState.receipts[0].amount_cents).toBe(28000);});
+ it('abre e prepara documento para impressão',async()=>{document.querySelector('[data-receipt-id="rcp_1"]').click();await vi.waitFor(()=>expect(document.querySelector('[data-download-receipt]')).toBeTruthy());document.querySelector('[data-download-receipt]').click();expect(URL.createObjectURL).toHaveBeenCalled();});
+ it('cancela sem apagar o documento',async()=>{document.querySelector('[data-cancel-receipt]').click();await vi.waitFor(()=>expect(document.querySelector('#receiptRows').textContent).toContain('Cancelado'));expect(globalThis.__apiState.receipts[0].status).toBe('cancelled');});
+});
