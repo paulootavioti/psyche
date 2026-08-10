@@ -7,7 +7,7 @@ const now = () => new Date().toISOString();
 const id = prefix => `${prefix}_${crypto.randomUUID()}`;
 
 export function createDatabase(filename = process.env.PSYCHE_DB_PATH || resolve('data/psyche.sqlite')) {
-  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+  const { DatabaseSync } = createRequire(resolve('server/database.js'))('node:sqlite');
   if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true });
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');

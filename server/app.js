@@ -230,8 +230,3 @@ export function createApp({ database, authStore, patientStore, clinicalStore, se
   };
   return { server:createServer(handler), db, handler, authStore:identityStore, patientStore:clinicalPatientStore, clinicalStore:longitudinalStore, sessionStore:attendanceStore, documentStore:psychologicalDocumentStore, financeStore:ledgerStore, payablesStore:obligationsStore, receiptStore:fiscalReceiptStore, invoiceStore:municipalInvoiceStore, agendaStore:schedulingStore, adminStore:administrativeStore, engagementStore:relationshipStore, operationsStore:operationalStore, analyticsStore:intelligenceStore };
 }
-
-if (process.argv[1] === new URL(import.meta.url).pathname) {
-  const { server }=createApp(); const port=Number(process.env.PORT||8787);
-  server.listen(port,'127.0.0.1',()=>console.log(`Psyché API em http://127.0.0.1:${port}`));
-}
