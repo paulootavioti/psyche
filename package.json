@@ -12,6 +12,8 @@
     "server": "node --env-file-if-exists=.env server/app.js",
     "dev:all": "npm run dev",
     "test:server": "node --test server/test/*.test.js",
+    "test:production": "npm run test:server && npm test && npm run build",
+    "netlify:dev": "netlify dev",
     "db:migrate": "node --env-file-if-exists=.env server/db/migrate.js",
     "db:transfer": "node --env-file-if-exists=.env server/db/transfer-sqlite.js",
     "db:transfer:dry": "node --env-file-if-exists=.env server/db/transfer-sqlite.js --dry-run"
@@ -22,6 +24,7 @@
     "vitest": "^0.34.6"
   },
   "dependencies": {
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "serverless-http": "^3.2.0"
   }
 }

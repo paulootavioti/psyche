@@ -6,8 +6,9 @@ const{Pool}=pg;
 export function postgresPool(connectionString=process.env.PSYCHE_DATABASE_URL){
   if(!connectionString)throw new Error('PSYCHE_DATABASE_URL é obrigatória para PostgreSQL');
   if(process.env.PSYCHE_DB_SSL_CA_PATH&&!existsSync(process.env.PSYCHE_DB_SSL_CA_PATH))throw new Error(`Certificado PostgreSQL não encontrado em ${process.env.PSYCHE_DB_SSL_CA_PATH}. Baixe o arquivo ou remova PSYCHE_DB_SSL_CA_PATH do .env.`);
-  const ssl=process.env.PSYCHE_DB_SSL==='false'?false:{rejectUnauthorized:process.env.PSYCHE_DB_SSL_REJECT_UNAUTHORIZED!=='false',...(process.env.PSYCHE_DB_SSL_CA_PATH?{ca:readFileSync(process.env.PSYCHE_DB_SSL_CA_PATH,'utf8')}:{})};
-  return new Pool({connectionString,max:Number(process.env.PSYCHE_DB_POOL_SIZE)||10,ssl,application_name:'psyche-api'});
+  const ca=process.env.PSYCHE_DB_SSL_CA_PATH?readFileSync(process.env.PSYCHE_DB_SSL_CA_PATH,'utf8'):process.env.PSYCHE_DB_SSL_CA_BASE64?Buffer.from(process.env.PSYCHE_DB_SSL_CA_BASE64,'base64').toString('utf8'):process.env.PSYCHE_DB_SSL_CA?.replace(/\\n/g,'\n');
+  const ssl=process.env.PSYCHE_DB_SSL==='false'?false:{rejectUnauthorized:process.env.PSYCHE_DB_SSL_REJECT_UNAUTHORIZED!=='false',...(ca?{ca}:{})};
+  return new Pool({connectionString,max:Number(process.env.PSYCHE_DB_POOL_SIZE)||4,ssl,application_name:'psyche-api',idleTimeoutMillis:Number(process.env.PSYCHE_DB_IDLE_TIMEOUT_MS)||30000,connectionTimeoutMillis:Number(process.env.PSYCHE_DB_CONNECT_TIMEOUT_MS)||10000});
 }
 
 export async function withTenant(pool,clinicId,callback){
