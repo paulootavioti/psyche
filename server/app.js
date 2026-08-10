@@ -36,26 +36,30 @@ async function body(req) {
 }
 
 export function createApp({ database, authStore, patientStore, clinicalStore, sessionStore, documentStore, financeStore, payablesStore, receiptStore, invoiceStore, agendaStore, adminStore, engagementStore, operationsStore, analyticsStore } = {}) {
-  const production=process.env.NODE_ENV==='production'||process.env.CONTEXT==='production';
+  const production=process.env.NODE_ENV==='production'||process.env.CONTEXT==='production'||process.env.NETLIFY==='true';
   if(production){
     if(usingDevelopmentKey)throw new Error('PSYCHE_DATA_KEY é obrigatória em produção');
     if(!process.env.PSYCHE_ADMIN_PASSWORD)throw new Error('PSYCHE_ADMIN_PASSWORD é obrigatória em produção');
     if(!process.env.PSYCHE_APP_ORIGINS&&!process.env.PSYCHE_APP_ORIGIN)throw new Error('PSYCHE_APP_ORIGINS é obrigatória em produção');
+    if(!process.env.PSYCHE_DATABASE_URL)throw new Error('PSYCHE_DATABASE_URL é obrigatória em produção');
   }
-  const identityStore=authStore||(process.env.PSYCHE_AUTH_STORE==='postgres'?postgresAuthStore():null);
-  const clinicalPatientStore=patientStore||(process.env.PSYCHE_PATIENT_STORE==='postgres'?postgresPatientStore():null);
-  const longitudinalStore=clinicalStore||(process.env.PSYCHE_CLINICAL_STORE==='postgres'?postgresClinicalStore():null);
-  const attendanceStore=sessionStore||(process.env.PSYCHE_SESSION_STORE==='postgres'?postgresSessionStore():null);
-  const psychologicalDocumentStore=documentStore||(process.env.PSYCHE_DOCUMENT_STORE==='postgres'?postgresDocumentStore():null);
-  const ledgerStore=financeStore||(process.env.PSYCHE_FINANCE_STORE==='postgres'?postgresFinanceStore():null);
-  const obligationsStore=payablesStore||(process.env.PSYCHE_PAYABLES_STORE==='postgres'?postgresPayablesStore():null);
-  const fiscalReceiptStore=receiptStore||(process.env.PSYCHE_RECEIPT_STORE==='postgres'?postgresReceiptStore():null);
-  const municipalInvoiceStore=invoiceStore||(process.env.PSYCHE_INVOICE_STORE==='postgres'?postgresInvoiceStore():null);
-  const schedulingStore=agendaStore||(process.env.PSYCHE_AGENDA_STORE==='postgres'?postgresAgendaStore():null);
-  const administrativeStore=adminStore||(process.env.PSYCHE_ADMIN_STORE==='postgres'?postgresAdminStore():null);
-  const relationshipStore=engagementStore||(process.env.PSYCHE_ENGAGEMENT_STORE==='postgres'?postgresEngagementStore():null);
-  const operationalStore=operationsStore||(process.env.PSYCHE_OPERATIONS_STORE==='postgres'?postgresOperationsStore():null);
-  const intelligenceStore=analyticsStore||(process.env.PSYCHE_ANALYTICS_STORE==='postgres'?postgresAnalyticsStore():null);
+  const storeMode=key=>process.env[key]||(production?'postgres':'sqlite');
+  const storeKeys=['PSYCHE_AUTH_STORE','PSYCHE_PATIENT_STORE','PSYCHE_CLINICAL_STORE','PSYCHE_SESSION_STORE','PSYCHE_DOCUMENT_STORE','PSYCHE_FINANCE_STORE','PSYCHE_PAYABLES_STORE','PSYCHE_RECEIPT_STORE','PSYCHE_INVOICE_STORE','PSYCHE_AGENDA_STORE','PSYCHE_ADMIN_STORE','PSYCHE_ENGAGEMENT_STORE','PSYCHE_OPERATIONS_STORE','PSYCHE_ANALYTICS_STORE'];
+  if(production){const invalid=storeKeys.filter(key=>storeMode(key)!=='postgres');if(invalid.length)throw new Error(`Stores inválidos em produção: ${invalid.join(', ')}`);}
+  const identityStore=authStore||(storeMode('PSYCHE_AUTH_STORE')==='postgres'?postgresAuthStore():null);
+  const clinicalPatientStore=patientStore||(storeMode('PSYCHE_PATIENT_STORE')==='postgres'?postgresPatientStore():null);
+  const longitudinalStore=clinicalStore||(storeMode('PSYCHE_CLINICAL_STORE')==='postgres'?postgresClinicalStore():null);
+  const attendanceStore=sessionStore||(storeMode('PSYCHE_SESSION_STORE')==='postgres'?postgresSessionStore():null);
+  const psychologicalDocumentStore=documentStore||(storeMode('PSYCHE_DOCUMENT_STORE')==='postgres'?postgresDocumentStore():null);
+  const ledgerStore=financeStore||(storeMode('PSYCHE_FINANCE_STORE')==='postgres'?postgresFinanceStore():null);
+  const obligationsStore=payablesStore||(storeMode('PSYCHE_PAYABLES_STORE')==='postgres'?postgresPayablesStore():null);
+  const fiscalReceiptStore=receiptStore||(storeMode('PSYCHE_RECEIPT_STORE')==='postgres'?postgresReceiptStore():null);
+  const municipalInvoiceStore=invoiceStore||(storeMode('PSYCHE_INVOICE_STORE')==='postgres'?postgresInvoiceStore():null);
+  const schedulingStore=agendaStore||(storeMode('PSYCHE_AGENDA_STORE')==='postgres'?postgresAgendaStore():null);
+  const administrativeStore=adminStore||(storeMode('PSYCHE_ADMIN_STORE')==='postgres'?postgresAdminStore():null);
+  const relationshipStore=engagementStore||(storeMode('PSYCHE_ENGAGEMENT_STORE')==='postgres'?postgresEngagementStore():null);
+  const operationalStore=operationsStore||(storeMode('PSYCHE_OPERATIONS_STORE')==='postgres'?postgresOperationsStore():null);
+  const intelligenceStore=analyticsStore||(storeMode('PSYCHE_ANALYTICS_STORE')==='postgres'?postgresAnalyticsStore():null);
   const postgresPrimary=!database&&[identityStore,clinicalPatientStore,longitudinalStore,attendanceStore,psychologicalDocumentStore,ledgerStore,obligationsStore,fiscalReceiptStore,municipalInvoiceStore,schedulingStore,administrativeStore,relationshipStore,operationalStore,intelligenceStore].every(Boolean);
   const db=database||(postgresPrimary?null:createDatabase());
   const audit=async(actor,action,entity,entityId,metadata={},ip='')=>{const event={id:h.id('aud'),clinicId:actor?.clinic_id||null,userId:actor?.id||null,action,entity,entityId:entityId||null,metadata,ip,createdAt:h.now()};if(administrativeStore&&event.clinicId)await administrativeStore.appendAudit(event);else db.prepare('INSERT INTO audit_log VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(event.id,event.clinicId,event.userId,event.action,event.entity,event.entityId,JSON.stringify(event.metadata),event.ip,event.createdAt);return event.id;};
