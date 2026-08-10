@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "server": "node --env-file-if-exists=.env server/app.js",
+    "server": "node --env-file-if-exists=.env server/start.js",
     "dev:all": "npm run dev",
     "test:server": "node --test server/test/*.test.js",
     "test:production": "npm run test:server && npm test && npm run build",
