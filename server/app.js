@@ -35,8 +35,8 @@ async function body(req) {
   try { return JSON.parse(Buffer.concat(chunks)); } catch { throw Object.assign(new Error('JSON inválido'), { status: 400 }); }
 }
 
-export function createApp({ database, authStore, patientStore, clinicalStore, sessionStore, documentStore, financeStore, payablesStore, receiptStore, invoiceStore, agendaStore, adminStore, engagementStore, operationsStore, analyticsStore } = {}) {
-  const production=process.env.NODE_ENV==='production'||process.env.CONTEXT==='production'||process.env.NETLIFY==='true';
+export function createApp({ database, authStore, patientStore, clinicalStore, sessionStore, documentStore, financeStore, payablesStore, receiptStore, invoiceStore, agendaStore, adminStore, engagementStore, operationsStore, analyticsStore, runtime } = {}) {
+  const production=runtime==='netlify'||process.env.NODE_ENV==='production'||process.env.CONTEXT==='production'||process.env.NETLIFY==='true';
   if(production){
     if(usingDevelopmentKey)throw new Error('PSYCHE_DATA_KEY é obrigatória em produção');
     if(!process.env.PSYCHE_ADMIN_PASSWORD)throw new Error('PSYCHE_ADMIN_PASSWORD é obrigatória em produção');

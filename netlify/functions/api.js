@@ -1,7 +1,7 @@
 import serverless from 'serverless-http';
 import { createApp } from '../../server/app.js';
 
-const application=createApp();
+const application=createApp({runtime:'netlify'});
 const adapter=serverless(application.handler,{
   request(request,event){
     const source=event.rawUrl||event.raw_url||event.path||request.url||'/api';
