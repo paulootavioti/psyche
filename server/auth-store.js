@@ -4,6 +4,7 @@ import { moduleCatalog } from './modules.js';
 export function postgresAuthStore(pool=postgresPool()){
   return{
     kind:'postgres',
+    async health(){const{rows}=await pool.query('SELECT 1 AS connected');return rows[0]?.connected===1;},
     async findUser(email){const{rows}=await pool.query('SELECT * FROM psyche_login_identity($1)',[email]);return rows[0]||null;},
     async userByToken(tokenHash,now){const{rows}=await pool.query('SELECT * FROM psyche_session_identity($1,$2)',[tokenHash,now]);return rows[0]||null;},
     async sessionTimeout(clinicId){return withTenant(pool,clinicId,async client=>{const{rows}=await client.query("SELECT value_json FROM clinic_settings WHERE clinic_id=$1 AND key='security'",[clinicId]);return Number(rows[0]?.value_json?.session_timeout_minutes)||480;});},

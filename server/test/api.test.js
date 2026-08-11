@@ -31,8 +31,15 @@ test('health endpoint reports database and encryption state', async () => {
   const result = await request('/api/health', { auth: null });
   assert.equal(result.status, 200);
   assert.equal(result.data.database, 'sqlite');
+  assert.equal(result.data.status, 'ok');
+  assert.ok(result.headers.get('x-request-id'));
   assert.equal(result.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(result.headers.get('cache-control'),'no-store');
+  const live=await request('/api/health/live',{auth:null});
+  assert.deepEqual(live.data,{status:'ok'});
+  const ready=await request('/api/health/ready',{auth:null});
+  assert.equal(ready.status,200);
+  assert.equal(ready.data.database,'sqlite');
 });
 
 test('production refuses to start with development security defaults',()=>{

@@ -7,7 +7,7 @@ import { postgresPool } from './postgres.js';
 const migrationDirectory=resolve(dirname(fileURLToPath(import.meta.url)),'migrations');
 export const checksum=value=>createHash('sha256').update(value).digest('hex');
 
-export async function migrate({pool=postgresPool(),directory=migrationDirectory}={}){
+export async function migrate({pool=postgresPool(process.env.PSYCHE_MIGRATION_DATABASE_URL||process.env.PSYCHE_DATABASE_URL),directory=migrationDirectory}={}){
   const client=await pool.connect();
   try{
     await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY,checksum text NOT NULL,applied_at timestamptz NOT NULL DEFAULT now())`);

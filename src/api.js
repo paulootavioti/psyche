@@ -11,13 +11,14 @@ class ApiClient {
         body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body
       });
     } catch {
-      throw Object.assign(new Error('Não foi possível conectar ao servidor. Inicie o Psyché com “npm run dev:all” e tente novamente.'), { status: 0 });
+      const local=['localhost','127.0.0.1'].includes(globalThis.location?.hostname);
+      throw Object.assign(new Error(local?'Não foi possível conectar ao servidor local. Inicie o Psyché e tente novamente.':'Não foi possível conectar ao servidor. Tente novamente em alguns instantes.'), { status: 0 });
     }
     const text = await response.text();
     let payload = null;
     if (text) { try { payload=JSON.parse(text); } catch { payload={ raw:text.slice(0,200) }; } }
     if (!response.ok) {
-      const message=payload?.error || (response.status>=500?'O servidor da API está indisponível. Confirme que “npm run dev:all” está ativo.':`A API respondeu com HTTP ${response.status}.`);
+      const message=payload?.error || (response.status>=500?'O serviço está temporariamente indisponível. Tente novamente em alguns instantes.':`A API respondeu com HTTP ${response.status}.`);
       throw Object.assign(new Error(message), { status: response.status, payload });
     }
     return payload;

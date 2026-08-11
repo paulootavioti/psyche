@@ -28,6 +28,13 @@ test('PostgreSQL migrations are immutable, ordered and include tenant RLS',async
   assert.match(sessionIdentity,/SET row_security=off/);
 });
 
+test('runtime role migration grants restricted application access',async()=>{
+  const sql=await readFile(resolve('server/db/migrations/011_runtime_role_grants.sql'),'utf8');
+  assert.match(sql,/GRANT USAGE ON SCHEMA public TO psyche_app/);
+  assert.match(sql,/GRANT EXECUTE ON FUNCTION psyche_login_identity\(text\) TO psyche_app/);
+  assert.doesNotMatch(sql,/BYPASSRLS/);
+});
+
 test('tenant transaction sets server-side context and commits',async()=>{
   const calls=[],client={query:async(sql,params)=>{calls.push([sql,params]);return{rows:[]};},release:()=>calls.push(['release'])},pool={connect:async()=>client};
   const value=await withTenant(pool,'cln_tenant_1',async connection=>{assert.equal(connection,client);return 42;});

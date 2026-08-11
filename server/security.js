@@ -6,8 +6,10 @@ const encryptionKey = createHash('sha256').update(keyMaterial).digest();
 
 export const usingDevelopmentKey = keyMaterial === developmentKey;
 
+const validationError = message => Object.assign(new Error(message), { status: 400, expose: true });
+
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {
-  if (typeof password !== 'string' || password.length < 6) throw new Error('A senha deve ter pelo menos 6 caracteres');
+  if (typeof password !== 'string' || password.length < 6) throw validationError('A senha deve ter pelo menos 6 caracteres');
   const hash = scryptSync(password, salt, 64).toString('hex');
   return `${salt}:${hash}`;
 }
@@ -41,20 +43,20 @@ export function decrypt(payload) {
 }
 
 export function cleanText(value, { min = 0, max = 500 } = {}) {
-  if (typeof value !== 'string') throw new Error('Valor textual inválido');
+  if (typeof value !== 'string') throw validationError('Valor textual inválido');
   const clean = value.trim().replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
-  if (clean.length < min || clean.length > max) throw new Error(`O texto deve ter entre ${min} e ${max} caracteres`);
+  if (clean.length < min || clean.length > max) throw validationError(`O texto deve ter entre ${min} e ${max} caracteres`);
   return clean;
 }
 
 export function cleanEmail(value) {
   const email = cleanText(value, { min: 5, max: 160 }).toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('E-mail inválido');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw validationError('E-mail inválido');
   return email;
 }
 
 export function cleanNumber(value, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   const number = Number(value);
-  if (!Number.isFinite(number) || number < min || number > max) throw new Error('Valor numérico inválido');
+  if (!Number.isFinite(number) || number < min || number > max) throw validationError('Valor numérico inválido');
   return number;
 }

@@ -15,6 +15,7 @@
     "test:production": "npm run test:server && npm test && npm run build",
     "netlify:dev": "netlify dev",
     "db:migrate": "node --env-file-if-exists=.env server/db/migrate.js",
+    "db:check-role": "node --env-file-if-exists=.env server/db/check-runtime-role.js",
     "db:transfer": "node --env-file-if-exists=.env server/db/transfer-sqlite.js",
     "db:transfer:dry": "node --env-file-if-exists=.env server/db/transfer-sqlite.js --dry-run"
   },
