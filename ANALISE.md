@@ -1,6 +1,8 @@
 # Análise técnica do Psyché
 
-Análise do branch `claude/configuracao-passo-a-passo-9y80su` sobre `45b4b50` ("reforca seguranca e isolamento PostgreSQL do runtime"). Todos os caminhos, números de linha e comportamentos citados foram verificados executando o código desta revisão.
+Análise de `main` no commit **`fc4daa3`** (merge do PR #2), de 19/08/2026. Todos os caminhos, números de linha e comportamentos citados foram verificados executando o código desta revisão.
+
+> Este documento é um retrato de um commit. Ao lê-lo, confira com `git log -1 --format=%H` se `main` ainda está em `fc4daa3`; se avançou, trate as seções 5, 6 e 9 como as mais sujeitas a envelhecer.
 
 ---
 
@@ -27,7 +29,7 @@ As únicas dependências de produção são `pg` e `serverless-http`. Todo o res
 
 ```
 index.html, style.css        Casca da SPA (entry único)
-src/                         Frontend: 24 módulos .js + styles.css
+src/                         Frontend: 29 módulos .js + styles.css
   app.js                     Bootstrap, navegação e templates das views
   api.js                     Cliente HTTP único (classe ApiClient)
   backend-integration.js     Ponte entre a UI e a API
@@ -35,19 +37,23 @@ src/                         Frontend: 24 módulos .js + styles.css
                              invoices, inventory, operations, chat, marketing,
                              reports, settings, team, dashboard, schedules,
                              clinical-records, psychological-documents,
-                             patient-portal, enhanced
-  test/                      14 arquivos Vitest
+                             patient-portal, enhanced, signup, plans, sales,
+                             legal, bootstrap
+  test/                      15 arquivos Vitest
 server/                      Backend
-  app.js                     createApp(): 53 rotas num único handler (246 linhas)
+  app.js                     createApp(): 78 rotas num único handler (250 linhas)
   database.js                Esquema SQLite legado + seed
   security.js                AES-256-GCM, scrypt, tokens, validadores
   modules.js                 Catálogo de módulos, planos e gate por rota
   <dominio>-store.js         14 stores PostgreSQL
   db/postgres.js             Fábrica de pool + withTenant()
   db/migrate.js              Runner de migrações com checksum
-  db/migrations/*.sql        11 migrações numeradas
+  db/migrations/*.sql        14 migrações numeradas
   db/transfer-sqlite.js      Importação SQLite → PostgreSQL
-  test/                      13 arquivos node:test
+  db/check-runtime-role.js   Confere que o runtime não é superusuário
+  email-service.js           E-mail transacional (Resend)
+  start.js                   Entrada do servidor local
+  test/                      14 arquivos node:test
 netlify/functions/api.js     Adaptador serverless
 netlify.toml                 Build, redirects, headers
 docs/                        4 documentos de projeto
@@ -88,15 +94,22 @@ São 14 chaves independentes (`PSYCHE_AUTH_STORE` … `PSYCHE_ANALYTICS_STORE`).
 
 ## 2. Modelo de dados
 
-Fonte de verdade em produção: `server/db/migrations/001_platform.sql` (36 tabelas) e `009_operational_assets.sql` (3 tabelas). O espelho SQLite em `server/database.js` é mantido à mão e diverge (ver §7).
+Fonte de verdade em produção: as 14 migrações em `server/db/migrations/`, que somam **46 tabelas** — 36 em `001_platform.sql`, 3 em `009_operational_assets.sql`, 3 em `012_commercial_subscriptions.sql`, 1 em `013` e 3 em `014`. O espelho SQLite em `server/database.js` cobre só as 39 originais e é mantido à mão (ver §7).
 
 ### Plataforma e tenancy
 
 | Tabela | Papel |
 |---|---|
 | `clinics` | O tenant. Raiz de tudo. |
-| `plans` | Catálogo global de planos (única tabela sem `clinic_id`). |
-| `clinic_subscriptions` | 1:1 com `clinics` → `plans`; status `trialing/active/past_due/suspended/cancelled`. |
+| `plans` | Catálogo global de planos. Desde a `012` carrega preço mensal, anual, moeda e descrição. |
+| `clinic_subscriptions` | 1:1 com `clinics` → `plans`; status `trialing/active/past_due/suspended/cancelled`. Desde a `012` também ciclo de faturamento e identificadores do provedor de pagamento. |
+| `subscription_provider_plans` | Plano+ciclo → id externo do provedor. Catálogo global, hoje inacessível (§3, Problema G). |
+| `subscription_invoices` | → `clinics`. Faturas da assinatura, `UNIQUE(provider,provider_invoice_id)`. |
+| `subscription_webhook_events` | Eventos do provedor, `UNIQUE(provider,provider_event_id)` para idempotência. Sem `clinic_id`. |
+| `subscription_change_requests` | → `clinics`, `users`, `plans`. Pedidos de troca, cancelamento ou reativação. |
+| `legal_documents` | Termos e política por versão (PK `key,version`). Catálogo global. |
+| `signup_requests` | Cadastro público pendente de verificação. Pré-tenant, sem `clinic_id`. |
+| `legal_acceptances` | → `clinics`, `users`, `legal_documents`. Aceite versionado com IP e user agent. |
 | `clinic_module_overrides` | Liga/desliga módulos por clínica (PK composta `clinic_id,module_key`). |
 | `units` | Unidades físicas da clínica. |
 | `clinic_settings` | Configurações chave/valor JSON (PK `clinic_id,key`). |
@@ -148,7 +161,7 @@ Nove colunas usam AES-256-GCM com prefixo `v1.` (`server/security.js:26-34`): `c
 
 ### Camada 1 — `clinic_id` nunca vem do cliente
 
-Em todas as 53 rotas, o tenant é derivado do usuário autenticado, nunca do corpo ou da query. O padrão é invariável (`server/app.js:78`):
+Em todas as 78 rotas, o tenant é derivado do usuário autenticado, nunca do corpo ou da query. O padrão é invariável (`server/app.js:78`):
 
 ```js
 const requireAccess = async (req, res, permission) => {
@@ -161,7 +174,7 @@ e em seguida `user.clinic_id` é o primeiro argumento de toda chamada de store. 
 
 ### Camada 2 — Row-Level Security no PostgreSQL
 
-`server/db/migrations/002_tenant_rls.sql` habilita `ENABLE` + **`FORCE ROW LEVEL SECURITY`** em 35 tabelas e `009` acrescenta mais 3 — 38 de 39. A única sem RLS é `plans`, corretamente, por ser catálogo global.
+`server/db/migrations/002_tenant_rls.sql` habilita `ENABLE` + **`FORCE ROW LEVEL SECURITY`** em 35 tabelas; `009`, `012`, `013` e `014` acrescentam mais 7 — **42 de 46**. As quatro sem RLS são `plans`, `legal_documents` (catálogos globais), `subscription_webhook_events` (eventos chegam antes de se saber o tenant) e `signup_requests` (pré-tenant por definição). Todas defensáveis; a última merece a atenção descrita adiante.
 
 Trinta tabelas usam a policy direta:
 
@@ -259,6 +272,41 @@ e no log do servidor:
 
 O tratamento de erro melhorou: a resposta é genérica, com `request_id` correlacionável, e o `TypeError` fica só no log — não há mais vazamento de mensagem interna. **Mas o defeito funcional permanece**: quem erra o e-mail no login recebe um erro de servidor em vez de `401 Credenciais inválidas`, e a tentativa não entra na trilha de auditoria. Do ponto de vista de quem sonda o sistema, `500` para e-mail inexistente e `401` para e-mail existente com senha errada é um oráculo de enumeração de usuários — a diferença de resposta entrega quais e-mails estão cadastrados.
 
+### Problema G — `subscription_provider_plans` nega todas as linhas a todo mundo
+
+`012_commercial_subscriptions.sql` habilita RLS na tabela e **não cria policy nenhuma**:
+
+```sql
+ALTER TABLE subscription_provider_plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subscription_provider_plans FORCE ROW LEVEL SECURITY;
+-- a única CREATE POLICY da migração é para subscription_invoices
+```
+
+No PostgreSQL, RLS habilitada sem policy é negação total: nenhuma linha é visível, nem para o dono da tabela (por causa do `FORCE`). O `GRANT SELECT ON plans,subscription_provider_plans TO psyche_app`, três linhas abaixo, é inócuo.
+
+A tabela nem deveria ter RLS: não tem `clinic_id`, é catálogo global como `plans` — que corretamente ficou sem RLS. O efeito hoje é latente, porque nenhuma rota a consulta ainda; vira falha concreta no dia em que o checkout precisar traduzir plano em `provider_plan_id`.
+
+### Problema H — a checagem de e-mail duplicado no cadastro nunca dispara
+
+`createSignup` e `verifySignup` (`server/auth-store.js:19` e `:21`) protegem contra conta duplicada assim:
+
+```js
+if((await client.query('SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1',[request.email])).rows[0])
+  throw Object.assign(new Error('Já existe uma conta com este e-mail'),{status:409});
+```
+
+Só que `users` tem RLS por `clinic_id=current_tenant_id()` e essa consulta roda **antes** de qualquer `set_config` — no cadastro público ainda não existe tenant. Com `current_tenant_id()` nulo, a policy é falsa e o `SELECT` devolve zero linhas **sempre**. A guarda é decorativa.
+
+A consequência não é conta duplicada — o `UNIQUE` global de `users.email` segura —, mas o erro chega cru: a violação vem do PostgreSQL como `23505`, o `catch` de `server/app.js:249` classifica como 409 e devolve `error.message` sem tratamento, expondo o nome da constraint. E acontece só na verificação, depois de o e-mail já ter sido enviado, em vez de no cadastro.
+
+### Nova superfície pré-tenant: `signup_requests`
+
+Das 46 tabelas, quatro estão sem RLS: `plans` e `legal_documents` (catálogos globais), `subscription_webhook_events` (eventos chegam antes de se saber o tenant) e `signup_requests`. As quatro são defensáveis por natureza, mas `signup_requests` merece atenção: guarda `password_hash`, `created_ip`, telefone e nome da clínica de quem ainda não é cliente, e é acessível diretamente por `psyche_app` sem nenhum filtro.
+
+Note a inconsistência de estratégia: para o outro acesso pré-tenant — login —, o projeto usa funções `SECURITY DEFINER` com escopo mínimo de colunas e `REVOKE` de `PUBLIC`. Aqui optou-se por `GRANT SELECT,INSERT,UPDATE` na tabela inteira. O token está corretamente guardado só como hash e há índice único parcial impedindo cadastros pendentes duplicados por e-mail, então o desenho é sólido — mas qualquer bug numa consulta futura a essa tabela enumera todos os cadastros em andamento, sem que RLS ou função restrita sirvam de rede.
+
+Um ponto bem resolvido, em contrapartida: `verifySignup` define `set_config('app.clinic_id', <novo id>, true)` antes de inserir a clínica, para que o `WITH CHECK` da policy aceite a linha. Criar tenant sob RLS sem recorrer a `BYPASSRLS` é acerto de projeto.
+
 ---
 
 ## 4. Autenticação e autorização
@@ -302,42 +350,60 @@ Origens permitidas por lista explícita em `PSYCHE_APP_ORIGINS` (`server/app.js:
 
 ## 5. Cobrança
 
-**Não existe cobrança.** Não há gateway de pagamento, nem assinatura recorrente, nem qualquer integração financeira externa. Busca por `stripe|pagar|mercadopago|asaas|iugu|checkout|webhook` em `server/` e `src/` não retorna nenhuma integração — só um botão "Pagar" decorativo no template estático do portal (`src/enhanced.js:51`), sem handler.
+**Existe, e é recente.** As migrações `012_commercial_subscriptions.sql`, `013_subscription_change_requests.sql` e `014_public_onboarding.sql` trouxeram preço, ciclo de faturamento, onboarding autônomo e aceite legal versionado. O que ainda não existe é a conexão com um provedor de pagamento.
 
-O que existe é a **modelagem** de um SaaS cobrável, sem o motor de cobrança:
+### O que já funciona
 
-- Catálogo de 4 planos com módulos e limites, em dois lugares — `server/db/migrations/003_seed_plans.sql` e `server/modules.js:12-17`.
-- `clinic_subscriptions` com status (`trialing/active/past_due/suspended/cancelled`), `trial_ends_at` e `current_period_ends_at` — campos que nada preenche nem faz avançar.
-- Enforcement real de limites antes de criar usuários, unidades e pacientes (`withinTenantLimit`, `server/app.js:79`, aplicado em `:135`, `:169`, `:175`), devolvendo 409.
-- Enforcement de módulo e de assinatura inativa por rota.
+**Catálogo comercial.** `plans` ganhou `monthly_price_cents`, `yearly_price_cents`, `currency` e `description`. Os preços estão no banco, não no código: Essencial R$ 147/mês, Profissional R$ 277/mês, Enterprise R$ 347/mês, com anuidades com desconto. O plano `clinic` foi desativado (`active=false`). Exposto publicamente por `GET /api/public/plans`.
 
-Ou seja: a plataforma sabe **negar acesso** conforme o plano, mas ninguém consegue **contratar, pagar ou renovar** um plano — não há cadastro autônomo de clínica, cobrança, fatura de assinatura ou webhook de provedor. `clinic_subscriptions` é populado por seed (`server/database.js:80`) com plano `clinic` fixo.
+**Cadastro autônomo com verificação de e-mail.** `POST /api/public/signup` grava um `signup_requests` com senha já hasheada, token de verificação armazenado só como hash (`verification_token_hash text NOT NULL UNIQUE`), versões aceitas dos documentos legais, IP de origem e expiração. `POST /api/public/signup/verify` converte a solicitação em tenant real — clínica, assinatura em `trialing` de 14 dias, unidade principal, usuário admin e dois `legal_acceptances` — tudo numa única transação, com `ROLLBACK` em qualquer falha.
 
-O módulo "financeiro" do produto (`financial_entries`, `receipts`, `fiscal_invoices`, `accounts_payable`) é o financeiro **da clínica com seus pacientes** — não tem relação com a monetização do SaaS. A emissão de NFS-e é apenas registro interno: `fiscal_invoices` tem `provider`, `external_id` e `verification_url`, mas nenhum código chama prefeitura alguma.
+O detalhe bem resolvido: `verifySignup` define `set_config('app.clinic_id', <novo id>, true)` **antes** dos INSERTs, para que o `WITH CHECK` da policy de `clinics` aceite a linha nova. Criar um tenant sob RLS sem abrir exceção é o tipo de coisa que costuma ser resolvida com `BYPASSRLS`; aqui não foi.
+
+**E-mail transacional.** `server/email-service.js` integra o Resend com `idempotency-key` por solicitação, escapa todo dado interpolado no HTML e nunca inclui a senha. Sem credencial configurada, `configured` é falso e a rota recusa o cadastro em produção — falha fechada, não aberta.
+
+**Mudança de plano auditável.** `subscription_change_requests` registra pedido, autor (`requested_by → users`), plano de origem e destino, motivo e status, com RLS por tenant. `POST /api/platform/subscription/requests` exige papel `admin`.
+
+**Enforcement.** Continua real: limites de usuários, unidades e pacientes antes da criação (`withinTenantLimit`, `server/app.js:79`), gate de módulo por rota e bloqueio 402 para assinatura fora de `active`/`trialing`.
+
+### O que falta
+
+**Nenhum provedor de pagamento está conectado.** As tabelas estão prontas — `subscription_provider_plans` mapeia plano → id externo, `subscription_invoices` guarda o ciclo `pending/paid/failed/refunded/cancelled`, `subscription_webhook_events` tem `UNIQUE(provider, provider_event_id)` para idempotência —, mas **nenhuma rota da API escreve ou lê nelas**. Não há endpoint de webhook nem de checkout entre as 78 rotas. `provider`, `provider_customer_id` e `provider_subscription_id` em `clinic_subscriptions` nunca são preenchidos.
+
+Ou seja: hoje uma clínica consegue **se cadastrar sozinha e usar 14 dias de trial**, mas ninguém consegue **pagar**. Quando o trial expira, o status não avança sozinho — não há job de expiração nem cobrança recorrente. A modelagem antecipou corretamente a integração; falta o motor.
+
+**`subscription_provider_plans` está inacessível.** Ver §3, Problema G: a tabela tem RLS habilitada e forçada sem nenhuma policy, o que nega todas as linhas a todos. O `GRANT SELECT` da mesma migração é inócuo. Quando o checkout for implementado, a consulta ao `provider_plan_id` virá vazia.
+
+### O que não é cobrança
+
+O módulo financeiro do produto (`financial_entries`, `receipts`, `fiscal_invoices`, `accounts_payable`) é o financeiro **da clínica com seus pacientes**, sem relação com a monetização do SaaS. A emissão de NFS-e segue como registro interno: `fiscal_invoices` tem `provider`, `external_id` e `verification_url`, mas nenhum código chama prefeitura alguma.
 
 ---
 
 ## 6. Testes
 
-139 testes, todos passando: 63 no backend (`npm run test:server`) e 76 no frontend (`npm test`). O atalho `npm run test:production` encadeia os dois mais o `build`.
+148 testes, todos passando nesta revisão: 70 no backend (`npm run test:server`) e 78 no frontend (`npm test`). O atalho `npm run test:production` encadeia os dois mais o `build`.
 
-### Backend — 13 arquivos, 60 testes
+### Backend — 14 arquivos, 70 testes
 
 | Arquivo | Testes | Cobre |
 |---|---|---|
 | `server/test/api.test.js` | 30 | Integração HTTP de ponta a ponta sobre SQLite em memória |
-| `server/test/postgres.test.js` | 5 | Imutabilidade das migrações, RLS textual, `withTenant`, configuração do pool |
-| `server/test/patient-store.test.js` | 4 | Escopo de tenant e de profissional |
-| `server/test/finance-store.test.js` | 3 | Resumo e lançamentos |
+| `server/test/postgres.test.js` | 9 | Imutabilidade das migrações, RLS textual, assinatura comercial, onboarding, `withTenant`, pool |
+| `server/test/patient-store.test.js` | 5 | Escopo de tenant e de profissional |
 | `server/test/serverless.test.js` | 3 | Modo PostgreSQL puro sem abrir SQLite, liveness e readiness |
-| demais stores (8 arquivos) | 2 cada | Forma das queries por domínio |
-| `server/test/auth-store.test.js` | 2 | Identidade e encerramento do pool |
+| `server/test/email-service.test.js` | 3 | E-mail desabilitado sem credencial, idempotência, erro do provedor |
+| `server/test/auth-store.test.js` | 3 | Identidade, readiness e encerramento do pool |
+| `server/test/finance-store.test.js` | 3 | Resumo e lançamentos |
+| demais stores (7 arquivos) | 2 cada | Forma das queries por domínio |
 
 `api.test.js` é o mais valioso: exercita login, RBAC, isolamento entre clínicas (`:88`), conflito de agenda, centavos inteiros, cifragem em repouso (verifica o prefixo `v1.` direto na coluna), imutabilidade de sessão finalizada e versionamento de prontuário.
 
-### Frontend — 14 arquivos, 76 testes
+### Frontend — 15 arquivos, 78 testes
 
-Vitest com happy-dom e uma API falsa em `src/test/setup.js`. Cobrem renderização, filtros, formulários e fluxos de cada módulo da UI.
+Vitest com happy-dom e uma API falsa em `src/test/setup.js`. Cobrem renderização, filtros, formulários e fluxos de cada módulo da UI, agora incluindo `plans.test.js`.
+
+Dois testes de `src/test/team.test.js` ("configures weekly availability…" e "edits and suspends a team member") falharam numa execução relatada em máquina local, um deles estourando o limite de 5 s por 46 ms. Aqui os 78 passam. O padrão — um `expected null to be truthy` e um timeout na fronteira — aponta para **instabilidade de tempo no happy-dom**, não defeito de lógica. Testes que dependem de `waitFor` sem folga são fonte recorrente de ruído em CI; vale elevar o `testTimeout` desse arquivo em vez de tratá-los como regressão.
 
 ### O que os testes não cobrem
 
@@ -347,11 +413,13 @@ A lacuna não é só de banco. O problema F de §3 é JavaScript puro, reproduz�
 
 Também não há: teste do adaptador Netlify (`netlify/functions/api.js` não é exercitado por nada), teste do `db/transfer-sqlite.js`, teste de carga ou de concorrência, e nenhum teste E2E de navegador.
 
+Os testes novos das migrações comerciais (`postgres.test.js:38-63`) ilustram bem o limite do método: eles fazem `assert.match` sobre o **texto** do arquivo `.sql`, verificando que a string `CREATE TABLE subscription_invoices` existe. Isso protege contra remoção acidental, mas não executa uma linha de SQL — foi exatamente assim que a RLS sem policy de `subscription_provider_plans` (§3, Problema G) passou verde.
+
 ---
 
 ## 7. Dívida técnica — os problemas mais graves por risco real
 
-Ordenados por perda de dados, depois segurança, depois indisponibilidade certa. São 11 porque o commit `45b4b50` resolveu um dos originais (os `GRANT` para `psyche_app`, via migração `011`) e abriu outro (a documentação de deploy ficou dessincronizada do health check).
+Ordenados por perda de dados, depois segurança, depois indisponibilidade certa. A lista cresceu de 10 para 13: as migrações comerciais `012`–`014` fecharam um problema antigo (os `GRANT` para `psyche_app`) e abriram três novos.
 
 **1. `PSYCHE_DATA_KEY` sem rotação, sem versionamento e sem escape** — `server/security.js:4`. A chave é derivada por SHA-256 de uma string única, fixada em `const` no carregamento do módulo. Não há identificador de versão de chave nos dados (o prefixo é sempre `v1.`), nem script de recifragem em `server/db/`. Perder a chave é perder definitivamente o conteúdo de nove colunas clínicas; trocá-la é operação sem caminho de volta suportado. É o único risco do repositório que é irreversível.
 
@@ -361,19 +429,23 @@ Ordenados por perda de dados, depois segurança, depois indisponibilidade certa.
 
 **4. O papel `psyche_app` nunca é criado** — nenhuma migração e nenhum documento contêm `CREATE ROLE`; `docs/runtime-database-role.md` parte de um `ALTER ROLE psyche_app` sobre um papel que nada cria. Em banco novo, `npm run db:migrate` aborta na `008` deixando o esquema pela metade.
 
-**5. Autenticação sem MFA, verificação de e-mail ou recuperação de senha** — para prontuário psicológico, o fator único com mínimo de 6 caracteres (`server/security.js:12`) é insuficiente. Uma senha vazada dá acesso direto a conteúdo que está cifrado em repouso mas é legível pela aplicação.
+**5. `subscription_provider_plans` com RLS sem policy nega tudo a todos** — `012_commercial_subscriptions.sql`. A tabela é catálogo global, sem `clinic_id`, e recebeu `ENABLE` + `FORCE ROW LEVEL SECURITY` sem nenhuma `CREATE POLICY`: no PostgreSQL isso é negação total, inclusive para o dono. O `GRANT SELECT` da mesma migração é inócuo. Hoje é latente, porque nenhuma rota lê a tabela; vira falha concreta quando o checkout precisar do `provider_plan_id` (§3, Problema G).
 
-**6. Rate limit de login é inócuo em produção** — `loginAttempts` é um `Map` em memória (`server/app.js:69`). Em Netlify Functions cada instância tem o seu, e instâncias nascem e morrem a cada pico: o limite de 5 tentativas não limita nada, basta distribuir. O mecanismo existe e dá falsa sensação de proteção.
+**6. A guarda de e-mail duplicado no cadastro público é decorativa** — `server/auth-store.js:19` e `:21` consultam `users` antes de haver tenant, e a RLS devolve zero linhas sempre (§3, Problema H). O `UNIQUE` global evita a conta duplicada, mas o erro só aparece na verificação — depois do e-mail enviado — e chega ao cliente como mensagem crua do PostgreSQL, expondo o nome da constraint.
 
-**7. `/api/portal/*` escapa do gate de módulo e de assinatura** — `server/modules.js:20-28` não mapeia essas rotas. Clínica inadimplente, suspensa ou com `communication` desativado continua com o portal do paciente no ar.
+**7. Autenticação sem MFA, verificação de e-mail ou recuperação de senha** — para prontuário psicológico, o fator único com mínimo de 6 caracteres (`server/security.js:12`) é insuficiente. Uma senha vazada dá acesso direto a conteúdo que está cifrado em repouso mas é legível pela aplicação.
 
-**8. Documentação de deploy descreve um health check que não existe mais** — `docs/netlify-deploy.md:88` manda conferir `"legacy_sqlite": false` na resposta de `/api/health`. O endpoint foi reescrito como readiness check e hoje devolve apenas `{"status":"ok","database":"postgresql"}` (`server/app.js:98`). Quem seguir o passo 5 do guia vai concluir que o deploy falhou quando ele está correto. O mesmo commit acrescentou `/api/health/live` e `/api/health/ready`, ainda não documentados.
+**8. Rate limit de login é inócuo em produção** — `loginAttempts` é um `Map` em memória (`server/app.js:69`). Em Netlify Functions cada instância tem o seu, e instâncias nascem e morrem a cada pico: o limite de 5 tentativas não limita nada, basta distribuir. O mecanismo existe e dá falsa sensação de proteção.
 
-**9. Dois esquemas paralelos mantidos à mão** — `server/database.js` (SQLite, `CREATE TABLE IF NOT EXISTS` no boot mais um `ALTER TABLE` ad-hoc na linha 73) versus `server/db/migrations/*.sql`. São 39 tabelas duplicadas em dois dialetos, sem nenhum teste que compare os dois. Toda mudança de esquema precisa ser escrita duas vezes, e a divergência só aparece em produção.
+**9. `/api/portal/*` escapa do gate de módulo e de assinatura** — `server/modules.js:20-28` não mapeia essas rotas. Clínica inadimplente, suspensa ou com `communication` desativado continua com o portal do paciente no ar.
 
-**10. `server/app.js` é praticamente irrevisável** — 246 linhas com ~50 mil caracteres: 53 rotas encadeadas em `if` dentro de uma única função, com regra de negócio, SQL SQLite, chamada de store e serialização na mesma linha. Várias linhas passam de 3 mil caracteres. É onde vivem as regras de isolamento entre clientes — o código que mais precisa ser lido com atenção é o que mais resiste à leitura. Os problemas 3 e 7 são consequência direta disso.
+**10. Documentação de deploy descreve um health check que não existe mais** — `docs/netlify-deploy.md:88` manda conferir `"legacy_sqlite": false` na resposta de `/api/health`. O endpoint foi reescrito como readiness check e hoje devolve apenas `{"status":"ok","database":"postgresql"}` (`server/app.js:98`). Quem seguir o passo 5 do guia vai concluir que o deploy falhou quando ele está correto. O mesmo commit acrescentou `/api/health/live` e `/api/health/ready`, ainda não documentados.
 
-**11. Os testes não exercitam o banco de produção** — pool falso em todos os stores (§6). A suíte inteira passa verde com os problemas 2, 3 e 4 presentes. A rede de segurança não cobre a camada onde estão os riscos mais caros.
+**11. Dois esquemas paralelos mantidos à mão** — `server/database.js` (SQLite, `CREATE TABLE IF NOT EXISTS` no boot mais um `ALTER TABLE` ad-hoc na linha 73) versus `server/db/migrations/*.sql`. Eram 39 tabelas duplicadas em dois dialetos; com as migrações `012`–`014` o PostgreSQL foi a 46 e o espelho SQLite ficou para trás — assinatura comercial, onboarding e aceite legal existem só em um dos lados. A divergência deixou de ser risco e virou fato, sem nenhum teste que compare os dois esquemas.
+
+**12. `server/app.js` é praticamente irrevisável** — 250 linhas com ~55 mil caracteres: 78 rotas encadeadas em `if` dentro de uma única função, com regra de negócio, SQL SQLite, chamada de store e serialização na mesma linha. Várias linhas passam de 3 mil caracteres. É onde vivem as regras de isolamento entre clientes — o código que mais precisa ser lido com atenção é o que mais resiste à leitura. Os problemas 3, 6 e 9 são consequência direta disso.
+
+**13. Os testes não exercitam o banco de produção** — pool falso em todos os stores (§6). A suíte inteira passa verde com os problemas 2, 3, 5 e 6 presentes. A rede de segurança não cobre a camada onde estão os riscos mais caros.
 
 *Menções fora do top 10, todas confirmadas em `docs/pre-migration-readiness.md`:* upload de mídia sem storage de objetos (`patient_documents` guarda `storage_key` para um serviço que não existe); nenhuma observabilidade, alerta ou correlação de log; sem backup testado; `console.error` como única saída de erro do servidor; NFS-e e notificações (e-mail/WhatsApp/SMS) modeladas mas nunca entregues.
 
@@ -386,6 +458,10 @@ Ordenados por perda de dados, depois segurança, depois indisponibilidade certa.
 **Fundação multi-tenant** — a peça mais valiosa e a mais difícil de reescrever. `server/db/migrations/002_tenant_rls.sql` + `withTenant()` (`server/db/postgres.js:18`) + tenant derivado só do usuário autenticado formam um padrão completo e correto de isolamento, portável para qualquer domínio trocando o nome de `clinics`.
 
 **Planos, módulos e limites** — `server/modules.js` inteiro é agnóstico: catálogo de módulos, planos com limites, overrides por tenant, gate por rota, enforcement de limite antes de criar recurso e bloqueio por assinatura inativa. Só a lista de nomes de módulo é do domínio.
+
+**Onboarding autônomo e aceite legal** — acrescentado pela migração `014`, é o pedaço mais reaproveitável do trabalho recente e nada tem de clínico: cadastro público com verificação por e-mail, senha hasheada antes da confirmação, token guardado só como hash, expiração, provisionamento transacional do tenant sob RLS e `legal_acceptances` versionado com IP e user agent. Esse último ponto — registrar *qual versão* dos termos a pessoa aceitou — é exigência de LGPD para qualquer SaaS brasileiro, e costuma ser lembrado tarde demais.
+
+**Modelagem de assinatura** — `subscription_invoices`, `subscription_webhook_events` com chave de idempotência por evento e `subscription_change_requests` formam um esqueleto de billing neutro, aplicável a qualquer produto por assinatura.
 
 **Autenticação e RBAC** — `server/security.js` (scrypt, tokens opacos com hash em repouso, AES-256-GCM, validadores) e o mapa de papéis são genéricos. "Profissional só vê os próprios registros" é o padrão *ownership scoping* de qualquer SaaS.
 
@@ -417,16 +493,16 @@ Ordenados por perda de dados, depois segurança, depois indisponibilidade certa.
 
 ## 9. Estado: MVP funcional, não pronto para produção
 
-**Não é esqueleto.** A funcionalidade é real e ampla: 53 endpoints, 39 tabelas, 24 módulos de frontend, 136 testes passando, migrações versionadas com checksum, RLS aplicada, cifragem em repouso funcionando (verificada em teste que inspeciona a coluna), RBAC com escopo por dono, limites de plano com enforcement, deploy serverless configurado. Regras de negócio não triviais estão implementadas e testadas: detecção de conflito de agenda contra regras de horário de unidade **e** de profissional, numeração sequencial de recibos com advisory lock por ano, prontuário append-only versionado, imutabilidade de sessão finalizada, integração de baixa de conta a pagar com o razão.
+**Não é esqueleto.** A funcionalidade é real e ampla: 78 endpoints, 46 tabelas, 29 módulos de frontend, 148 testes passando, migrações versionadas com checksum, RLS aplicada, cifragem em repouso funcionando (verificada em teste que inspeciona a coluna), RBAC com escopo por dono, limites de plano com enforcement, cadastro autônomo com verificação de e-mail e deploy serverless configurado. Regras de negócio não triviais estão implementadas e testadas: detecção de conflito de agenda contra regras de horário de unidade **e** de profissional, numeração sequencial de recibos com advisory lock por ano, prontuário append-only versionado, imutabilidade de sessão finalizada, integração de baixa de conta a pagar com o razão, e provisionamento transacional de um tenant novo sob RLS.
 
 **Também não está pronto para produção**, e por três motivos que não são questão de polimento:
 
 **Primeiro, o caminho crítico ainda não fecha.** Os problemas 2, 3 e 4 de §7 estão todos no fluxo de entrada: o login do paciente sempre falha por RLS; um login com e-mail inexistente responde `500` e denuncia quais e-mails existem; e `npm run db:migrate` aborta em banco novo por falta do papel `psyche_app`. O segundo eu reproduzi executando o código desta revisão. Nenhum é detectado pela suíte, porque nenhum teste roda contra um PostgreSQL real e quase nenhum percorre as rotas no modo PostgreSQL puro — a configuração de produção. O sistema ainda não foi exercitado na configuração em que vai rodar.
 
-O commit `45b4b50` fechou parte dessa lacuna e merece registro: a migração `011` concedeu as permissões que faltavam a `psyche_app`, `check-runtime-role.js` verifica que o runtime não roda como superusuário, `/api/health/live` e `/api/health/ready` separam liveness de readiness, e o tratamento de erro passou a devolver `500` genérico com `request_id` em vez de vazar `error.message`. É movimento na direção certa, e reduz a distância — não a elimina.
+O trabalho recente fechou parte da lacuna e merece registro: a migração `011` concedeu as permissões que faltavam a `psyche_app`, `check-runtime-role.js` verifica que o runtime não roda como superusuário, `/api/health/live` e `/ready` separam liveness de readiness, e o tratamento de erro passou a devolver `500` genérico com `request_id` em vez de vazar `error.message`. As migrações `012`–`014` acrescentaram cobrança e onboarding — e, com eles, dois defeitos novos do mesmo tipo (problemas 5 e 6 de §7): RLS sem policy e consulta pré-tenant cega por RLS. O padrão se repete porque a causa é a mesma — **nada executa SQL contra um PostgreSQL real antes do deploy**.
 
 **Segundo, a postura de segurança está abaixo do que o dado exige.** Prontuário psicológico é dado sensível sob a LGPD. O sistema entrega cifragem em repouso e auditoria — bom — mas com fator único de autenticação, senha de 6 caracteres, rate limit que não limita em serverless, sem recuperação de senha, sem MFA e sem chave de cifragem rotacionável. Para um CRM de vendas isso passa; para prontuário, não.
 
 **Terceiro, faltam as operações.** Sem observabilidade, sem alerta, sem backup testado, sem restauração ensaiada, sem storage para os documentos que a UI já oferece anexar. `docs/pre-migration-readiness.md` é honesto sobre isso e o projeto acerta em não apresentar esses recursos como ativos.
 
-**Distância estimada até produção:** os três defeitos de migração são correções de poucas linhas — o custo real é montar um ambiente de homologação com PostgreSQL de verdade e uma suíte de integração que exercite RLS e as funções `SECURITY DEFINER`, sem a qual esses erros continuarão invisíveis. Somando MFA e recuperação de senha, storage de objetos, backup testado e observabilidade mínima, o caminho é de semanas de trabalho focado, não de meses de reescrita. A fundação é sólida; o que falta é a camada que separa "funciona na minha máquina" de "posso responder por isso quando cair".
+**Distância estimada até produção:** os defeitos de migração são correções de poucas linhas cada — uma `015` com `CREATE OR REPLACE` de `psyche_patient_login_identity` e `DROP` da RLS de `subscription_provider_plans`, mais o ajuste do `audit` e das consultas pré-tenant. O custo real não está neles: está em montar um ambiente de homologação com PostgreSQL de verdade e uma suíte de integração que exercite RLS, funções `SECURITY DEFINER` e o fluxo de cadastro ponta a ponta. Sem isso, cada leva de migrações vai continuar entregando esse mesmo tipo de erro invisível. Somando MFA e recuperação de senha, a conexão do provedor de pagamento, storage de objetos, backup testado e observabilidade mínima, o caminho é de semanas de trabalho focado, não de meses de reescrita. A fundação é sólida; o que falta é a camada que separa "funciona na minha máquina" de "posso responder por isso quando cair".
