@@ -19,6 +19,7 @@ export function postgresPatientStore(pool=postgresPool()){
     },
     async create(clinicId,patient){
       return withTenant(pool,clinicId,async client=>{
+        if(patient.professionalId){const professional=(await client.query("SELECT id FROM users WHERE id=$1 AND clinic_id=$2 AND active=true AND role IN('admin','professional')",[patient.professionalId,clinicId])).rows[0];if(!professional)throw Object.assign(new Error('Profissional responsável inválido ou inativo'),{status:400});}
         const{rows}=await client.query(`INSERT INTO patients(id,clinic_id,professional_id,name,email,phone,cpf_encrypted,birth_date,status,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$9) RETURNING id,name,email,phone,birth_date,status,professional_id,created_at`,[patient.id,clinicId,patient.professionalId,patient.name,patient.email,patient.phone,patient.cpfEncrypted,patient.birthDate,patient.createdAt]);
         return rows[0];
       });

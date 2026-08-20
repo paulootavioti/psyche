@@ -35,6 +35,33 @@ test('runtime role migration grants restricted application access',async()=>{
   assert.doesNotMatch(sql,/BYPASSRLS/);
 });
 
+test('commercial subscription migration stores prices and payment lifecycle',async()=>{
+  const sql=await readFile(resolve('server/db/migrations/012_commercial_subscriptions.sql'),'utf8');
+  assert.match(sql,/monthly_price_cents=14700/);
+  assert.match(sql,/yearly_price_cents=299160/);
+  assert.match(sql,/monthly_price_cents=34700/);
+  assert.match(sql,/CREATE TABLE subscription_invoices/);
+  assert.match(sql,/CREATE TABLE subscription_webhook_events/);
+  assert.match(sql,/UNIQUE\(provider,provider_event_id\)/);
+});
+
+test('subscription change requests are tenant-scoped and auditable',async()=>{
+  const sql=await readFile(resolve('server/db/migrations/013_subscription_change_requests.sql'),'utf8');
+  assert.match(sql,/CREATE TABLE subscription_change_requests/);
+  assert.match(sql,/requested_by text NOT NULL REFERENCES users/);
+  assert.match(sql,/ENABLE ROW LEVEL SECURITY/);
+  assert.match(sql,/clinic_id=current_tenant_id\(\)/);
+});
+
+test('public onboarding requires verification and versioned legal acceptance',async()=>{
+  const sql=await readFile(resolve('server/db/migrations/014_public_onboarding.sql'),'utf8');
+  assert.match(sql,/CREATE TABLE signup_requests/);
+  assert.match(sql,/verification_token_hash text NOT NULL UNIQUE/);
+  assert.match(sql,/CREATE TABLE legal_acceptances/);
+  assert.match(sql,/document_version text NOT NULL/);
+  assert.match(sql,/status='pending_email'/);
+});
+
 test('tenant transaction sets server-side context and commits',async()=>{
   const calls=[],client={query:async(sql,params)=>{calls.push([sql,params]);return{rows:[]};},release:()=>calls.push(['release'])},pool={connect:async()=>client};
   const value=await withTenant(pool,'cln_tenant_1',async connection=>{assert.equal(connection,client);return 42;});
