@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { checksum } from '../db/migrate.js';
-import { withTenant } from '../db/postgres.js';
+import { postgresPool, withTenant } from '../db/postgres.js';
 
 test('PostgreSQL migrations are immutable, ordered and include tenant RLS',async()=>{
   const platform=await readFile(resolve('server/db/migrations/001_platform.sql'),'utf8'),rls=await readFile(resolve('server/db/migrations/002_tenant_rls.sql'),'utf8'),identity=await readFile(resolve('server/db/migrations/004_auth_identity.sql'),'utf8'),clinicalVersions=await readFile(resolve('server/db/migrations/005_clinical_record_versions.sql'),'utf8'),documentVerification=await readFile(resolve('server/db/migrations/006_document_verification.sql'),'utf8'),receiptVerification=await readFile(resolve('server/db/migrations/007_receipt_verification.sql'),'utf8'),patientIdentity=await readFile(resolve('server/db/migrations/008_patient_identity.sql'),'utf8'),sessionIdentity=await readFile(resolve('server/db/migrations/010_session_identity.sql'),'utf8');
@@ -72,4 +72,32 @@ test('tenant transaction rolls back and rejects unsafe identifiers',async()=>{
   const calls=[],client={query:async sql=>{calls.push(sql);return{rows:[]};},release:()=>calls.push('release')},pool={connect:async()=>client};
   await assert.rejects(()=>withTenant(pool,'cln_safe',async()=>{throw new Error('failure');}),/failure/);assert.ok(calls.includes('ROLLBACK'));
   await assert.rejects(()=>withTenant(pool,"cln_x'; RESET ROLE; --",async()=>{}),/tenant inválido/);
+});
+
+test('o pool é configurável e não derruba a função em erro de conexão ociosa',async()=>{
+  const url='postgresql://psyche_app:senha@localhost:5432/psyche_teste';
+  const keys=['PSYCHE_DB_SSL','PSYCHE_DB_SSL_REJECT_UNAUTHORIZED','PSYCHE_DB_SSL_CA_BASE64','PSYCHE_DB_POOL_SIZE','PSYCHE_DB_IDLE_TIMEOUT_MS','PSYCHE_DB_CONNECT_TIMEOUT_MS'];
+  const previous=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
+  Object.assign(process.env,{PSYCHE_DB_SSL:'true',PSYCHE_DB_SSL_REJECT_UNAUTHORIZED:'true',PSYCHE_DB_SSL_CA_BASE64:Buffer.from('-----BEGIN CERTIFICATE-----\nteste\n-----END CERTIFICATE-----').toString('base64'),PSYCHE_DB_POOL_SIZE:'4',PSYCHE_DB_IDLE_TIMEOUT_MS:'30000',PSYCHE_DB_CONNECT_TIMEOUT_MS:'10000'});
+  try{
+    const pool=postgresPool(url);
+    assert.equal(pool.options.max,4);
+    assert.equal(pool.options.idleTimeoutMillis,30000);
+    assert.equal(pool.options.connectionTimeoutMillis,10000);
+    assert.equal(pool.options.ssl.rejectUnauthorized,true);
+    assert.match(pool.options.ssl.ca,/BEGIN CERTIFICATE/);
+    // O provedor derruba conexões ociosas; sem ouvinte de `error` o evento viraria
+    // exceção não tratada e mataria a instância serverless inteira.
+    assert.equal(pool.listenerCount('error'),1);
+    pool.emit('error',new Error('conexão encerrada pelo provedor'));
+    await pool.end();
+  }finally{
+    for(const key of keys)if(previous[key]===undefined)delete process.env[key];else process.env[key]=previous[key];
+  }
+});
+
+test('a conexão exige PSYCHE_DATABASE_URL',()=>{
+  const previous=process.env.PSYCHE_DATABASE_URL;delete process.env.PSYCHE_DATABASE_URL;
+  try{assert.throws(()=>postgresPool(),/PSYCHE_DATABASE_URL/);}
+  finally{if(previous===undefined)delete process.env.PSYCHE_DATABASE_URL;else process.env.PSYCHE_DATABASE_URL=previous;}
 });

@@ -43,6 +43,8 @@ Cadastre em **Site configuration → Environment variables**:
 - `PSYCHE_APP_ORIGINS=https://SEU-SITE.netlify.app`
 - todos os 14 `PSYCHE_*_STORE=postgres` descritos em `.env.example`
 
+`PSYCHE_DB_POOL_SIZE` é o total por instância da função: os 14 módulos compartilham o mesmo pool. Mantenha o valor baixo, porque instâncias simultâneas somam conexões no limite do provedor.
+
 Se o provedor exigir uma CA privada, configure `PSYCHE_DB_SSL_CA_BASE64`. Para gerar o valor no macOS:
 
 ```bash
