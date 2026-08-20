@@ -27,6 +27,17 @@ test('patient creation runs inside tenant context and returns only safe fields',
   assert.doesNotMatch(insert[0],/RETURNING \*/);
 });
 
+test('patient creation rejects an inactive or non-clinical responsible professional',async()=>{
+  const{pool,calls}=fakePool([{rows:[]}]);
+  await assert.rejects(
+    ()=>postgresPatientStore(pool).create('cln_one',{id:'pat_new',professionalId:'usr_inactive',name:'Ana',email:'ana@example.com',phone:null,cpfEncrypted:'encrypted',birthDate:null,createdAt:'2026-08-07T12:00:00.000Z'}),
+    /Profissional responsável inválido ou inativo/
+  );
+  const lookup=calls.find(([sql])=>sql.includes('active=true')&&/role IN\s*\('admin','professional'\)/.test(sql));
+  assert.deepEqual(lookup?.[1],['usr_inactive','cln_one']);
+  assert.equal(calls.some(([sql])=>sql.includes('INSERT INTO patients')),false);
+});
+
 test('patient detail joins profile under tenant and professional scope',async()=>{
   const{pool,calls}=fakePool([{rows:[{id:'pat_1',gender:'feminino',emergency_name_encrypted:'ciphertext'}]}]);
   const patient=await postgresPatientStore(pool).get('cln_one','pat_1',{actorRole:'professional',actorId:'usr_one'});

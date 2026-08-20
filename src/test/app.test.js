@@ -140,6 +140,18 @@ describe('Psyché integrated application', () => {
     expect(localStorage.getItem('psyche:customPatients')).toBeNull();
   });
 
+  it('offers only active clinical professionals when registering a patient', () => {
+    const inactive={id:'usr_inactive',name:'Profissional removido',role:'professional',active:0};
+    globalThis.__apiState.team.push(inactive);
+    window.dispatchEvent(new CustomEvent('psyche:hydrated',{detail:{team:globalThis.__apiState.team,patients:globalThis.__apiState.patients,units:globalThis.__apiState.units}}));
+    document.querySelector('.patients-action').click();
+    const options=[...document.querySelector('#crudForm [name="professional_id"]').options];
+    expect(options.map(option=>option.textContent)).toContain('Carolina Martins');
+    expect(options.map(option=>option.textContent)).not.toContain('Profissional removido');
+    document.querySelector('#crudDialog').close();
+    globalThis.__apiState.team.pop();
+  });
+
   it('creates collaborators and financial entries through the API', async () => {
     document.querySelector('.team-action').click();
     let form = document.querySelector('#crudForm');

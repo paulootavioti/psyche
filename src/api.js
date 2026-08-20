@@ -24,6 +24,10 @@ class ApiClient {
     return payload;
   }
   health() { return this.request('/health'); }
+  publicPlans() { return this.request('/public/plans'); }
+  legalDocuments() { return this.request('/public/legal-documents'); }
+  signup(data) { return this.request('/public/signup',{method:'POST',body:data}); }
+  verifySignup(token) { return this.request('/public/signup/verify',{method:'POST',body:{token}}); }
   async login(email, password) { const result=await this.request('/auth/login',{method:'POST',body:{email,password}});this.token=result.token;this.user=result.user;sessionStorage.setItem('psyche:apiToken',result.token);return result; }
   async logout() { try { await this.request('/auth/logout',{method:'POST'}); } finally { this.token=null;sessionStorage.removeItem('psyche:apiToken'); } }
   configurePatientAccess(id,data) { return this.request(`/patients/${id}/portal-access`,{method:'POST',body:data}); }
@@ -37,6 +41,9 @@ class ApiClient {
   async me() { const result=await this.request('/me');this.user=result.user;return result; }
   platformContext() { return this.request('/platform/context'); }
   configureModule(moduleKey,enabled,reason='') { return this.request('/platform/modules',{method:'PATCH',body:{module_key:moduleKey,enabled,reason}}); }
+  subscriptionCatalog() { return this.request('/platform/subscription/catalog'); }
+  subscription() { return this.request('/platform/subscription'); }
+  requestSubscriptionChange(data) { return this.request('/platform/subscription/requests',{method:'POST',body:data}); }
   dashboard({ date, months = 6 } = {}) { const query=new URLSearchParams();if(date)query.set('date',date);query.set('months',months);return this.request(`/dashboard?${query}`); }
   reports(filters={}) { const query=new URLSearchParams(Object.entries(filters).filter(([,v])=>v));return this.request(`/reports/summary${query.size?`?${query}`:''}`); }
   patients(filters='') { const query=typeof filters==='string'?new URLSearchParams(filters?{q:filters}:{}):new URLSearchParams(Object.entries(filters).filter(([,v])=>v!=null&&v!==''));return this.request(`/patients${query.size?`?${query}`:''}`); }

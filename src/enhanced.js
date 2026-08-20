@@ -57,10 +57,20 @@ const _ = (o, e, d = "text", l = false, p = []) => `<div class="field ${l ? "ful
 function Vt({ navigate: o, showToast: e, api: d }) {
   var Pe, pe, Te, ke, Re, Ae;
   const l = document.querySelector("#crudDialog"), p = document.querySelector("#crudForm");
-  let y = "";
+  let y = "", activeProfessionals = [];
+  const escapeOption = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  window.addEventListener("psyche:hydrated", (event) => {
+    activeProfessionals = event.detail.team.filter((member) => member.active && ["admin", "professional"].includes(member.role));
+  });
   const f = (g) => {
     y = g;
     const T = { patients: ["Novo paciente", _("Nome completo", "name") + _("CPF", "cpf") + _("E-mail", "email", "email") + _("Telefone", "phone") + _("Data de nascimento", "birth", "date") + _("Profissional respons\xE1vel", "professional", "text", false, ["Dra. Carolina Martins", "Dr. Gustavo Lima", "Dra. Helena Souza"])], team: ["Novo colaborador", _("Nome completo", "name") + _("E-mail corporativo", "email", "email") + _("Senha tempor\xE1ria", "password", "password") + _("Fun\xE7\xE3o", "role", "text", false, ["Profissional cl\xEDnico", "Recep\xE7\xE3o", "Financeiro", "Administrador"]) + _("Unidade", "unit", "text", false, ["Jardins", "Vila Mariana", "Todas"])], finance: ["Novo lan\xE7amento", _("Descri\xE7\xE3o", "description", "text", true) + _("Tipo", "type", "text", false, ["Receita", "Despesa"]) + _("Valor", "value", "number") + _("Vencimento", "date", "date") + _("Status", "status", "text", false, ["Pago", "Pendente"])], marketing: ["Nova campanha", _("Nome da campanha", "name", "text", true) + _("Canal", "channel", "text", false, ["E-mail", "WhatsApp", "Portal do paciente"]) + _("P\xFAblico", "audience", "text", false, ["Novos pacientes", "Pacientes atendidos", "Pacientes inativos"])], chat: ["Nova mensagem", _("Destinat\xE1rio", "name", "text", true) + _("Assunto", "subject", "text", true) + _("Mensagem", "message", "text", true)], settings: ["Adicionar unidade", _("Nome da unidade", "name", "text", true) + _("Endere\xE7o", "address", "text", true) + _("Quantidade de consult\xF3rios", "rooms", "number") + _("Status", "status", "text", false, ["Ativa", "Em implanta\xE7\xE3o"])] }[g];
+    if (T && g === "patients") {
+      const options = activeProfessionals.length
+        ? activeProfessionals.map((member) => `<option value="${escapeOption(member.id)}">${escapeOption(member.name)}</option>`).join("")
+        : '<option value="" disabled>Nenhum profissional ativo disponível</option>';
+      T[1] = _("Nome completo", "name") + _("CPF", "cpf") + _("E-mail", "email", "email") + _("Telefone", "phone") + _("Data de nascimento", "birth", "date") + `<div class="field"><label>Profissional responsável</label><select name="professional_id" required>${options}</select></div>`;
+    }
     T && (document.querySelector("#dialogTitle").textContent = T[0], document.querySelector("#dialogFields").innerHTML = T[1], l.showModal());
   };
   document.querySelectorAll(".patients-action,.team-action,.finance-action").forEach((g) => g.addEventListener("click", () => f(g.classList[1].replace("-action", "")))), p.addEventListener("submit", async (g) => {
@@ -70,7 +80,7 @@ function Vt({ navigate: o, showToast: e, api: d }) {
     g.preventDefault();
     const E = Object.fromEntries(new FormData(p));
     try {
-      y === "patients" && await d.createPatient({ name: E.name, email: E.email, phone: E.phone, cpf: E.cpf, birth_date: E.birth, professional_id: (A = d.user) == null ? void 0 : A.id }), y === "team" && (window.__psycheNewTeamMember = await d.createTeamMember({ name: E.name, email: E.email, password: E.password, role: ({ "Profissional cl\xEDnico": "professional", "Recep\xE7\xE3o": "reception", "Financeiro": "finance", "Administrador": "admin" })[E.role] || E.role })), y === "finance" && await d.createFinancialEntry({ description: E.description, type: E.type === "Receita" ? "income" : "expense", amount: Number(E.value), due_date: E.date, status: E.status === "Pago" ? "paid" : "pending" }), y === "marketing" && await d.createCampaign({ name: E.name, channel: E.channel, audience: E.audience }), l.close(), p.reset(), e("Cadastro salvo no backend"), window.dispatchEvent(new Event("psyche:refresh"));
+      y === "patients" && await d.createPatient({ name: E.name, email: E.email, phone: E.phone, cpf: E.cpf, birth_date: E.birth, professional_id: E.professional_id }), y === "team" && (window.__psycheNewTeamMember = await d.createTeamMember({ name: E.name, email: E.email, password: E.password, role: ({ "Profissional cl\xEDnico": "professional", "Recep\xE7\xE3o": "reception", "Financeiro": "finance", "Administrador": "admin" })[E.role] || E.role })), y === "finance" && await d.createFinancialEntry({ description: E.description, type: E.type === "Receita" ? "income" : "expense", amount: Number(E.value), due_date: E.date, status: E.status === "Pago" ? "paid" : "pending" }), y === "marketing" && await d.createCampaign({ name: E.name, channel: E.channel, audience: E.audience }), l.close(), p.reset(), e("Cadastro salvo no backend"), window.dispatchEvent(new Event("psyche:refresh"));
     } catch (ve) {
       e(ve.message);
     }

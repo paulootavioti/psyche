@@ -17,6 +17,7 @@ Este documento delimita o que funciona na arquitetura local atual e o que deve p
 - Trilha de auditoria das operações sensíveis.
 - Validações, estados vazios/erro, exportações CSV e layout responsivo.
 - Inicialização de produção bloqueada quando chave, senha administrativa ou origem permitida não forem configuradas.
+- Migrações numeradas de PostgreSQL e adaptação da API para Netlify Functions, com pool compartilhado entre os módulos e sem dependência do SQLite legado. Ver [deploy no Netlify](netlify-deploy.md).
 - Política configurável de cobrança prévia ou posterior, tolerância, faltas e revisão administrativa.
 
 ## Regras clínicas e financeiras adotadas
@@ -46,8 +47,6 @@ O módulo não oferece receituário medicamentoso. Para psicólogas(os), o Psych
 
 ## Deliberadamente pendente de infraestrutura externa
 
-- PostgreSQL e migrações de produção.
-- Adaptação da API para Netlify Functions.
 - Cadastro autônomo de clínicas, planos, trial e cobrança recorrente.
 - MFA, verificação de e-mail e recuperação de senha por provedor de identidade/e-mail.
 - Pagamento online no portal do paciente.
